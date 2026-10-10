@@ -17,6 +17,26 @@ extension NSScreen {
     }
 }
 
+/// The applications a capture of the built-in display leaves out, so the
+/// overlay never lands in its own picture.
+enum CaptureExclusion {
+    /// `nil` while ScreenCaptureKit does not list this process yet. It lists
+    /// an application only once it owns a window, and a filter built before
+    /// then would capture the overlay, so callers skip the capture instead.
+    static func applications(in content: SCShareableContent) -> [SCRunningApplication]? {
+        let processID = NSRunningApplication.current.processIdentifier
+        guard let current = content.applications.first(where: { $0.processID == processID }) else {
+            return nil
+        }
+        // Another copy of the app draws an overlay too.
+        let bundleID = current.bundleIdentifier
+        guard !bundleID.isEmpty else { return [current] }
+        return content.applications.filter {
+            $0.processID == processID || $0.bundleIdentifier == bundleID
+        }
+    }
+}
+
 /// Keeps a recent screenshot of the built-in display ready.
 ///
 /// Building an `SCContentFilter` enumerates every on-screen window, so the
@@ -154,11 +174,16 @@ final class ScreenSnapshotter {
             )
             guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
                 filter = nil
+                filterDisplayID = nil
                 return
             }
             // Exclude ourselves, or a lingering overlay lands in the next snapshot.
-            let bundleID = Bundle.main.bundleIdentifier
-            let ownApplications = content.applications.filter { $0.bundleIdentifier == bundleID }
+            guard let ownApplications = CaptureExclusion.applications(in: content) else {
+                Diagnostics.geometry.error("snapshot cannot exclude this app: it is not listed yet")
+                filter = nil
+                filterDisplayID = nil
+                return
+            }
             filter = SCContentFilter(
                 display: display,
                 excludingApplications: ownApplications,

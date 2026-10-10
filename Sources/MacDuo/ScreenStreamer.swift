@@ -30,6 +30,19 @@ final class ScreenStreamer {
             super.init()
         }
 
+        /// A still screen keeps the stream sending idle frames, which repeat
+        /// the last picture. Handing those over would rebuild the pyramid for
+        /// nothing.
+        private static func isComplete(_ sampleBuffer: CMSampleBuffer) -> Bool {
+            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+                sampleBuffer,
+                createIfNecessary: false
+            ) as? [[SCStreamFrameInfo: Any]],
+                let raw = attachments.first?[.status] as? Int,
+                let status = SCFrameStatus(rawValue: raw) else { return false }
+            return status == .complete
+        }
+
         /// The newest frame and its number, or `nil` before the first one.
         func latest() -> (frame: CapturedFrame, id: UInt64)? {
             lock.lock()
@@ -45,6 +58,7 @@ final class ScreenStreamer {
         ) {
             guard type == .screen,
                   CMSampleBufferIsValid(sampleBuffer),
+                  Self.isComplete(sampleBuffer),
                   let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
             // Lets go of the surfaces nothing holds, so the pool keeps recycling.
@@ -156,7 +170,12 @@ final class ScreenStreamer {
             if filter == nil || filterDisplayID != displayID {
                 await rebuildFilter(displayID: displayID)
             }
-            guard !Task.isCancelled, isStarted, let activeFilter = filter else { return }
+            guard !Task.isCancelled, isStarted else { return }
+            guard let activeFilter = filter else {
+                // Left startable, so the next sample tries again.
+                isStarted = false
+                return
+            }
 
             let configuration = SCStreamConfiguration()
             configuration.width = Int(activeFilter.contentRect.width * CGFloat(activeFilter.pointPixelScale))
@@ -209,10 +228,10 @@ final class ScreenStreamer {
                 return
             }
             // Exclude ourselves, or the overlay feeds back into its own picture.
-            let bundleID = Bundle.main.bundleIdentifier
-            let ownApplications = content.applications.filter { $0.bundleIdentifier == bundleID }
-            if ownApplications.isEmpty {
-                Diagnostics.geometry.error("stream cannot exclude this app: it owns no window yet")
+            guard let ownApplications = CaptureExclusion.applications(in: content) else {
+                Diagnostics.geometry.error("stream cannot exclude this app: it is not listed yet")
+                invalidateFilter()
+                return
             }
             filter = SCContentFilter(
                 display: display,

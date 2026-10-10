@@ -44,6 +44,24 @@ final class DepthRenderer {
 
     nonisolated private let device: MTLDevice
     nonisolated private let queue: MTLCommandQueue
+    /// Whether the pyramid comes from `MPSImageGaussianPyramid`.
+    ///
+    /// It runs on Apple GPUs. On the Intel and AMD GPUs of older MacBooks it
+    /// can refuse to encode, or encode and leave the levels above 0 holding
+    /// garbage, and the shader samples those levels by number: black edges on
+    /// one report and a red gradient on another, both with geometry intact.
+    /// Those GPUs take the blit encoder's mipmaps, a box filter that is
+    /// coarser than a Gaussian but valid on every Metal device. Setting the
+    /// `useBoxBlur` default forces that path, to check it on Apple GPUs.
+    nonisolated private let usesGaussianPyramid: Bool
+    /// Texture usage for a picture, which only MPS writes to from a shader.
+    nonisolated private var pictureUsage: MTLTextureUsage {
+        usesGaussianPyramid ? [.shaderRead, .shaderWrite] : [.shaderRead]
+    }
+    /// What the last drawn frame showed, so a frame that would look the same
+    /// is skipped. A lid held still otherwise redraws the whole screen at the
+    /// display refresh rate.
+    private var lastDrawn: DrawState?
     private let pipeline: MTLRenderPipelineState
     private var texture: MTLTexture?
     private var screenSize: CGSize = .zero
@@ -63,7 +81,7 @@ final class DepthRenderer {
     /// A held picture to start from, waiting for the same moment. A live
     /// frame that arrives first wins, since it is the newer of the two.
     private var pendingSeed: (buffer: MTLBuffer, width: Int, height: Int)?
-    private static var hasReportedPyramidFailure = false
+    nonisolated(unsafe) private static var hasReportedPyramidFailure = false
     /// Built once, re-encoded every frame.
     private lazy var livePyramid = MPSImageGaussianPyramid(device: device, centerWeight: 0.375)
 
@@ -74,6 +92,11 @@ final class DepthRenderer {
               let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
+        usesGaussianPyramid = device.supportsFamily(.apple7)
+            && !UserDefaults.standard.bool(forKey: "useBoxBlur")
+        Diagnostics.geometry.notice(
+            "gpu \(device.name, privacy: .public), pyramid \(self.usesGaussianPyramid ? "gaussian" : "box", privacy: .public)"
+        )
 
         do {
             let library = try device.makeLibrary(source: DepthShaders.source, options: nil)
@@ -95,7 +118,28 @@ final class DepthRenderer {
         let fresh = CAMetalLayer()
         configure(fresh)
         layer = fresh
+        lastDrawn = nil
         return fresh
+    }
+
+    /// Builds the mip chain under a picture, in place. Falls back to blit
+    /// mipmaps when MPS is not used or refuses to encode.
+    nonisolated private func buildPyramid(
+        _ pyramid: MPSImageGaussianPyramid?,
+        into texture: inout MTLTexture,
+        on commands: MTLCommandBuffer
+    ) {
+        if usesGaussianPyramid, let pyramid,
+           pyramid.encode(commandBuffer: commands, inPlaceTexture: &texture, fallbackCopyAllocator: nil) {
+            return
+        }
+        if usesGaussianPyramid, !Self.hasReportedPyramidFailure {
+            Self.hasReportedPyramidFailure = true
+            Diagnostics.geometry.error("pyramid: MPS refused to encode, using blit mipmaps")
+        }
+        guard let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.generateMipmaps(for: texture)
+        blit.endEncoding()
     }
 
     private func configure(_ target: CAMetalLayer) {
@@ -166,7 +210,7 @@ final class DepthRenderer {
             height: height,
             mipmapped: true
         )
-        descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.usage = pictureUsage
         descriptor.storageMode = .private
         guard var texture = device.makeTexture(descriptor: descriptor),
               let commands = queue.makeCommandBuffer(),
@@ -184,8 +228,11 @@ final class DepthRenderer {
         )
         blit.endEncoding()
 
-        MPSImageGaussianPyramid(device: device, centerWeight: 0.375)
-            .encode(commandBuffer: commands, inPlaceTexture: &texture, fallbackCopyAllocator: nil)
+        buildPyramid(
+            usesGaussianPyramid ? MPSImageGaussianPyramid(device: device, centerWeight: 0.375) : nil,
+            into: &texture,
+            on: commands
+        )
         commands.commit()
         commands.waitUntilCompleted()
         let finished = CFAbsoluteTimeGetCurrent()
@@ -234,7 +281,7 @@ final class DepthRenderer {
             )
             // `renderTarget` is only there for the one clear that blacks the
             // margin.
-            descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
+            descriptor.usage = pictureUsage.union(.renderTarget)
             descriptor.storageMode = .private
             guard let fresh = device.makeTexture(descriptor: descriptor) else { return false }
             clearToBlack(fresh)
@@ -245,6 +292,7 @@ final class DepthRenderer {
 
         texture = nil
         isLiveSource = true
+        lastDrawn = nil
         self.screenSize = screenSize
         self.pixelScale = pixelScale
         paddedOrigin = CGPoint(x: -padding, y: -padding)
@@ -286,6 +334,7 @@ final class DepthRenderer {
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         pendingSeed = (staging, width, height)
         texture = liveTexture
+        lastDrawn = nil
         return true
     }
 
@@ -293,6 +342,7 @@ final class DepthRenderer {
         guard isLiveSource, liveTexture != nil else { return }
         pendingFrame = frame
         pendingSeed = nil
+        lastDrawn = nil
         // The texture object is the one the next pass reads, and the copy into
         // it is encoded ahead of that pass.
         texture = liveTexture
@@ -340,15 +390,7 @@ final class DepthRenderer {
         pendingFrame = nil
         pendingSeed = nil
         blit.endEncoding()
-        let built = livePyramid.encode(
-            commandBuffer: commands,
-            inPlaceTexture: &target,
-            fallbackCopyAllocator: nil
-        )
-        if !built, !Self.hasReportedPyramidFailure {
-            Self.hasReportedPyramidFailure = true
-            Diagnostics.geometry.error("live pyramid in place encode returned false")
-        }
+        buildPyramid(usesGaussianPyramid ? livePyramid : nil, into: &target, on: commands)
         liveTexture = target
         texture = target
     }
@@ -382,6 +424,7 @@ final class DepthRenderer {
     func adopt(_ picture: PreparedPicture) {
         isLiveSource = false
         texture = picture.texture
+        lastDrawn = nil
         // Without a tag the window server treats the drawable as sRGB and
         // converts it to the display space.
         layer.colorspace = picture.colourSpace
@@ -412,6 +455,17 @@ final class DepthRenderer {
         maxBlurRadius: Double,
         maxDim: Double
     ) {
+        let state = DrawState(
+            corners: corners,
+            blurStrength: blurStrength,
+            dimStrength: dimStrength,
+            hingeFloor: hingeFloor,
+            dimHingeFloor: dimHingeFloor,
+            dimReach: dimReach,
+            maxBlurRadius: maxBlurRadius,
+            maxDim: maxDim
+        )
+        if let lastDrawn, lastDrawn.looksLike(state) { return }
         guard let commands = queue.makeCommandBuffer() else { return }
         absorbPending(into: commands)
         guard let texture, screenSize.width > 0, screenSize.height > 0,
@@ -464,5 +518,36 @@ final class DepthRenderer {
         encoder.endEncoding()
         commands.present(drawable)
         commands.commit()
+        lastDrawn = state
+    }
+}
+
+/// The inputs of one drawn frame.
+private struct DrawState {
+    var corners: [CGPoint]
+    var blurStrength: Double
+    var dimStrength: Double
+    var hingeFloor: Double
+    var dimHingeFloor: Double
+    var dimReach: Double
+    var maxBlurRadius: Double
+    var maxDim: Double
+
+    /// The spring settles towards its target without ever landing on it, so
+    /// frames are compared to well under a pixel and a level of shading.
+    func looksLike(_ other: DrawState) -> Bool {
+        guard corners.count == other.corners.count else { return false }
+        for (a, b) in zip(corners, other.corners)
+        where abs(a.x - b.x) > 0.02 || abs(a.y - b.y) > 0.02 {
+            return false
+        }
+        let tolerance = 1e-4
+        return abs(blurStrength - other.blurStrength) < tolerance
+            && abs(dimStrength - other.dimStrength) < tolerance
+            && abs(hingeFloor - other.hingeFloor) < tolerance
+            && abs(dimHingeFloor - other.dimHingeFloor) < tolerance
+            && abs(dimReach - other.dimReach) < tolerance
+            && abs(maxBlurRadius - other.maxBlurRadius) < tolerance
+            && abs(maxDim - other.maxDim) < tolerance
     }
 }
