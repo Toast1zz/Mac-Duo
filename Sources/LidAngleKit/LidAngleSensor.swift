@@ -107,6 +107,18 @@ public final class LidAngleSensor {
     /// Readings above this are a shut lid that wrapped around.
     public static let wraparoundFloor: Double = 270
 
+    /// Drops the device and finds it again. A handle can go stale when the
+    /// sensor is enumerated again, after a wake for instance.
+    public func reopen() {
+        if let manager {
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        }
+        manager = nil
+        device = nil
+        resolution = nil
+        open()
+    }
+
     // MARK: - Device
 
     private func open() {

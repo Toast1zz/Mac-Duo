@@ -50,7 +50,20 @@ final class LidController: ObservableObject {
     private var consecutiveFailedReads = 0
     private var startedAt: CFTimeInterval = 0
     private var preview: PreviewRun?
-    private var isSuspended = false
+    /// Why the effect is paused. It runs again once every reason has cleared.
+    private var suspensions: Set<Suspension> = []
+    private var isSuspended: Bool { !suspensions.isEmpty }
+    private var lastSuspendedAt: CFTimeInterval = 0
+
+    private enum Suspension {
+        case systemSleep
+        case displaySleep
+        /// The lock screen or another user's session is up. The overlay sits
+        /// at the shielding level, and a picture of the desktop must not stay
+        /// on top of it.
+        case locked
+        case sessionInactive
+    }
     private var isCapturePending = false
     private var motionIntent = LidMotionIntent()
     private var openDwell = LidOpenDwell()
@@ -77,6 +90,7 @@ final class LidController: ObservableObject {
     /// resting lid gains nothing from polling faster than this.
     private static let idlePollInterval: TimeInterval = 1.0 / 10
     private static let activePollInterval: TimeInterval = 1.0 / 30
+    private static let clamshellPollInterval: TimeInterval = 1.0 / 2
     private static let fadeInDuration: TimeInterval = 0.07
 
     /// How long polling stays fast after the lid last moved.
@@ -250,7 +264,10 @@ final class LidController: ObservableObject {
     }
 
     private func poll() {
-        guard !isSuspended else { return }
+        guard !isSuspended else {
+            recoverMissedUnlock()
+            return
+        }
 
         let angle: Double
         if let run = preview {
@@ -272,6 +289,11 @@ final class LidController: ObservableObject {
                         """
                     )
                     setActive(false)
+                }
+                // About every five seconds at the resting rate.
+                if consecutiveFailedReads % 50 == 0 {
+                    Diagnostics.lid.notice("sensor reads keep failing, opening it again")
+                    sensor.reopen()
                 }
                 return
             }
@@ -303,7 +325,14 @@ final class LidController: ObservableObject {
         let isMoving = CACurrentMediaTime() - lastMovementTime < Self.movementLinger
         let wantsFastPolling = preferences.isEnabled
             && (preview != nil || isActive || isClosingOut || isMoving)
-        setPollInterval(wantsFastPolling ? Self.activePollInterval : Self.idlePollInterval)
+        if wantsFastPolling {
+            setPollInterval(Self.activePollInterval)
+        } else if builtInLayout.displayID == nil {
+            // Shut in clamshell mode, with only the menu bar angle to keep.
+            setPollInterval(Self.clamshellPollInterval)
+        } else {
+            setPollInterval(Self.idlePollInterval)
+        }
     }
 
     private var effectPolicy: LidEffectPolicy {
@@ -676,11 +705,25 @@ final class LidController: ObservableObject {
 
     private func observeSystemEvents() {
         let workspace = NSWorkspace.shared.notificationCenter
-        workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.suspend() }
+        let pairs: [(NSNotification.Name, NSNotification.Name, Suspension)] = [
+            (NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification, .systemSleep),
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, .displaySleep),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, .sessionInactive),
+        ]
+        for (pause, unpause, reason) in pairs {
+            workspace.addObserver(forName: pause, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.suspend(reason) }
+            }
+            workspace.addObserver(forName: unpause, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resume(reason) }
+            }
         }
-        workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.resume() }
+        let distributed = DistributedNotificationCenter.default()
+        distributed.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.suspend(.locked) }
+        }
+        distributed.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resume(.locked) }
         }
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -711,15 +754,33 @@ final class LidController: ObservableObject {
         }
     }
 
-    private func suspend() {
-        Diagnostics.lid.notice("suspend")
-        isSuspended = true
-        stopEffectAndCapture()
+    private func suspend(_ reason: Suspension) {
+        Diagnostics.lid.notice("suspend: \(String(describing: reason), privacy: .public)")
+        let wasSuspended = isSuspended
+        suspensions.insert(reason)
+        lastSuspendedAt = CACurrentMediaTime()
+        if !wasSuspended { stopEffectAndCapture() }
     }
 
-    private func resume() {
-        Diagnostics.lid.notice("resume")
-        isSuspended = false
+    /// A missed unlock or session notification would leave the effect off for
+    /// good, so a suspended poll checks the session itself.
+    private func recoverMissedUnlock() {
+        // The session state can trail the notification by a moment.
+        guard CACurrentMediaTime() - lastSuspendedAt > 2,
+              suspensions.contains(.locked) || suspensions.contains(.sessionInactive),
+              let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return }
+        if suspensions.contains(.locked), session["CGSSessionScreenIsLocked"] as? Bool != true {
+            resume(.locked)
+        }
+        if suspensions.contains(.sessionInactive), session[kCGSessionOnConsoleKey as String] as? Bool == true {
+            resume(.sessionInactive)
+        }
+    }
+
+    private func resume(_ reason: Suspension) {
+        guard suspensions.remove(reason) != nil else { return }
+        Diagnostics.lid.notice("resume: \(String(describing: reason), privacy: .public)")
+        guard !isSuspended else { return }
         // A fresh baseline, so waking with a nearly shut lid does not read as
         // closing movement.
         motion.reset()
