@@ -40,8 +40,11 @@ final class LidController: ObservableObject {
     private var rawAngle: Double = 0
     /// Degrees per second, negative while the lid closes.
     private var angularVelocity: Double = 0
-    private var lastChangedAngle: Double?
+    private var motion = LidMotion()
     private var lastChangeTime: CFTimeInterval = 0
+    /// When the lid last moved past the jitter deadband.
+    private var lastMovementTime: CFTimeInterval = -.greatestFiniteMagnitude
+    private var rearm = LidRearm()
     private var lastClosingTime: CFTimeInterval = -.greatestFiniteMagnitude
     private var visualAngle = CriticallyDampedSpring()
     private var consecutiveFailedReads = 0
@@ -70,11 +73,14 @@ final class LidController: ObservableObject {
     /// once the lid has risen `LidEffectPolicy.minimumReleaseRise` above it.
     private var lowestRunAngle: Double = 0
 
-    private static let idlePollInterval: TimeInterval = 1.0 / 8
+    /// The sensor produces a new value about 8 to 10 times a second, so a
+    /// resting lid gains nothing from polling faster than this.
+    private static let idlePollInterval: TimeInterval = 1.0 / 10
     private static let activePollInterval: TimeInterval = 1.0 / 30
     private static let fadeInDuration: TimeInterval = 0.07
-    /// Degrees above the pre-warm zone at which polling speeds up.
-    private static let fastPollMargin: Double = 20
+
+    /// How long polling stays fast after the lid last moved.
+    private static let movementLinger: TimeInterval = 1.5
 
     /// Closing speed that counts as a deliberate close, in degrees per second.
     /// A still lid reads under 0.5.
@@ -163,7 +169,7 @@ final class LidController: ObservableObject {
         setPollInterval(Self.idlePollInterval)
         observeSystemEvents()
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("to.maki.MacDuo.preview"),
+            forName: Notification.Name("com.toast.ToastDuo.preview"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -202,11 +208,12 @@ final class LidController: ObservableObject {
 
     private func disableEffect() {
         stopEffectAndCapture()
-        lastChangedAngle = nil
+        motion.reset()
         angularVelocity = 0
         lastClosingTime = -.greatestFiniteMagnitude
         motionIntent.reset()
         openDwell.reset()
+        rearm.disarm()
         peakAngle = 0
         if pollTimer != nil { setPollInterval(Self.idlePollInterval) }
     }
@@ -236,6 +243,8 @@ final class LidController: ObservableObject {
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        // Lets the system coalesce the wakeup with others.
+        timer.tolerance = interval * 0.1
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
     }
@@ -283,12 +292,17 @@ final class LidController: ObservableObject {
         if preferences.isEnabled {
             updateVelocity(with: angle)
             openDwell.update(angle: angle, at: CACurrentMediaTime(), dwellAngle: effectPolicy.dwellAngle)
+            if !isActive {
+                rearm.update(angle: angle, threshold: preferences.thresholdAngle, at: CACurrentMediaTime())
+            }
             reconcile(angle: angle)
         }
 
-        let prewarmZone = preferences.thresholdAngle + preferences.prewarmCeiling
+        // A resting lid polls slowly. The first reading that moves past the
+        // jitter deadband speeds polling up for the close that may follow.
+        let isMoving = CACurrentMediaTime() - lastMovementTime < Self.movementLinger
         let wantsFastPolling = preferences.isEnabled
-            && (preview != nil || isActive || angle <= prewarmZone + Self.fastPollMargin)
+            && (preview != nil || isActive || isClosingOut || isMoving)
         setPollInterval(wantsFastPolling ? Self.activePollInterval : Self.idlePollInterval)
     }
 
@@ -325,6 +339,7 @@ final class LidController: ObservableObject {
             predictedAngle: predictedAngle(),
             riseSinceLowest: angle - lowestRunAngle,
             hasBeenAboveThreshold: peakAngle >= threshold,
+            isArmed: rearm.isArmed,
             wasClosingRecently: motionIntent.wasClosingRecently(
                 at: now,
                 memoryDuration: Self.closingMemory
@@ -387,20 +402,11 @@ final class LidController: ObservableObject {
 
     private func updateVelocity(with angle: Double) {
         let now = CACurrentMediaTime()
-        guard let last = lastChangedAngle else {
-            lastChangedAngle = angle
+        if let instant = motion.update(angle: angle, at: now) {
+            angularVelocity = 0.5 * instant + 0.5 * angularVelocity
             lastChangeTime = now
-            return
-        }
-        if angle != last {
-            let dt = now - lastChangeTime
-            if dt > 0.001 {
-                let instant = (angle - last) / dt
-                angularVelocity = 0.5 * instant + 0.5 * angularVelocity
-            }
-            lastChangedAngle = angle
-            lastChangeTime = now
-        } else if now - lastChangeTime > 0.4 {
+            lastMovementTime = now
+        } else if now - motion.anchorTime > 0.4 {
             angularVelocity = 0
         }
         motionIntent.update(
@@ -472,6 +478,7 @@ final class LidController: ObservableObject {
             setPollInterval(Self.activePollInterval)
             presentPicture()
         } else {
+            rearm.disarm()
             snapshotter.discard()
             timeoutReferenceAngle = nil
             beginClosingOut()
@@ -715,11 +722,12 @@ final class LidController: ObservableObject {
         isSuspended = false
         // A fresh baseline, so waking with a nearly shut lid does not read as
         // closing movement.
-        lastChangedAngle = nil
+        motion.reset()
         angularVelocity = 0
         lastClosingTime = -.greatestFiniteMagnitude
         motionIntent.reset()
         openDwell.reset()
+        rearm.disarm()
         peakAngle = 0
         timeoutReferenceAngle = nil
         timeoutAwaitingRelease = false

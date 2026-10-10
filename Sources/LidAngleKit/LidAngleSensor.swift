@@ -94,8 +94,18 @@ public final class LidAngleSensor {
             lastRead.rejectedDegrees = degrees
             return nil
         }
-        return degrees
+        return Self.normalized(degrees)
     }
+
+    /// No MacBook hinge opens past 180 degrees. A shut lid can read just
+    /// under 360 instead of just over 0, as if it had closed past flat, and
+    /// alternate between the two. Those readings mean shut.
+    public static func normalized(_ degrees: Double) -> Double {
+        degrees > wraparoundFloor ? 0 : degrees
+    }
+
+    /// Readings above this are a shut lid that wrapped around.
+    public static let wraparoundFloor: Double = 270
 
     // MARK: - Device
 

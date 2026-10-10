@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The menu bar item and the settings popover.
@@ -9,7 +10,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     private let popover = NSPopover()
     private let preferences: Preferences
     private let controller: LidController
-    private var titleTimer: Timer?
+    private var titleSubscription: AnyCancellable?
     private var barWindowMoved: NSObjectProtocol?
 
     init(controller: LidController, preferences: Preferences) {
@@ -21,7 +22,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         if let button = statusItem.button {
             button.image = NSImage(
                 systemSymbolName: "laptopcomputer",
-                accessibilityDescription: "Mac Duo"
+                accessibilityDescription: "Toast Duo"
             )
             button.imagePosition = .imageLeading
             button.target = self
@@ -43,17 +44,17 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         hostingController.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hostingController
 
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshTitle() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        titleTimer = timer
-        refreshTitle()
+        // Follows the published angle rather than polling it, so a hidden angle
+        // costs nothing and a resting lid wakes nothing.
+        titleSubscription = controller.$currentAngle
+            .combineLatest(preferences.$showsAngleInMenuBar)
+            .sink { [weak self] angle, shows in
+                self?.refreshTitle(angle: angle, shows: shows)
+            }
         watchBarWindow()
     }
 
     deinit {
-        titleTimer?.invalidate()
         if let barWindowMoved {
             NotificationCenter.default.removeObserver(barWindowMoved)
         }
@@ -99,12 +100,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.show(relativeTo: .zero, of: button, preferredEdge: .minY)
     }
 
-    private func refreshTitle() {
+    private func refreshTitle(angle: Double, shows: Bool) {
         guard let button = statusItem.button else { return }
-        if preferences.showsAngleInMenuBar {
-            button.title = String(format: " %.0f°", controller.currentAngle)
-        } else if !button.title.isEmpty {
-            button.title = ""
-        }
+        let title = shows ? String(format: " %.0f°", angle) : ""
+        // Setting an unchanged title still lays the menu bar out again.
+        if button.title != title { button.title = title }
     }
 }

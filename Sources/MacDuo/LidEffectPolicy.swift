@@ -49,6 +49,76 @@ struct LidOpenDwell {
     }
 }
 
+/// Whether a new run may start. A run that ends disarms it, and the lid has
+/// to open clearly past the start angle, or rest at it, before the next run.
+/// Without this, rocking the lid around the start angle replays the whole
+/// effect: opening across it ends a run and closing back starts another.
+struct LidRearm {
+    private(set) var isArmed = false
+    private var aboveSince: TimeInterval?
+
+    /// Degrees past the start angle that re-arm at once.
+    static let margin: Double = 3
+
+    /// How long the lid has to rest at or above the start angle instead, for
+    /// a start angle near the hinge limit.
+    static let dwell: TimeInterval = 0.4
+
+    mutating func update(angle: Double, threshold: Double, at now: TimeInterval) {
+        guard !isArmed else { return }
+        guard angle >= threshold else {
+            aboveSince = nil
+            return
+        }
+        if angle >= threshold + Self.margin {
+            isArmed = true
+            return
+        }
+        if let aboveSince {
+            if now - aboveSince >= Self.dwell { isArmed = true }
+        } else {
+            aboveSince = now
+        }
+    }
+
+    mutating func disarm() {
+        isArmed = false
+        aboveSince = nil
+    }
+}
+
+/// Tells a moving lid from sensor jitter. A resting lid can wander by a tenth
+/// of a degree, and over a short poll interval that reads as several degrees
+/// per second.
+struct LidMotion {
+    /// Changes smaller than this, in degrees, are noise.
+    static let deadband: Double = 0.25
+
+    private(set) var anchor: Double?
+    private(set) var anchorTime: TimeInterval = 0
+
+    /// Returns the speed in degrees per second when the angle has moved past
+    /// the deadband since the last movement, and `nil` otherwise.
+    mutating func update(angle: Double, at now: TimeInterval) -> Double? {
+        guard let anchor else {
+            self.anchor = angle
+            anchorTime = now
+            return nil
+        }
+        guard abs(angle - anchor) >= Self.deadband else { return nil }
+        let dt = now - anchorTime
+        self.anchor = angle
+        anchorTime = now
+        guard dt > 0.001 else { return nil }
+        return (angle - anchor) / dt
+    }
+
+    mutating func reset() {
+        anchor = nil
+        anchorTime = 0
+    }
+}
+
 struct LidEffectPolicy {
     let threshold: Double
     let hysteresis: Double
@@ -73,6 +143,7 @@ struct LidEffectPolicy {
         predictedAngle: Double,
         riseSinceLowest: Double,
         hasBeenAboveThreshold: Bool,
+        isArmed: Bool = true,
         wasClosingRecently: Bool,
         isClearlyOpening: Bool,
         hasDwelledOpen: Bool,
@@ -102,6 +173,7 @@ struct LidEffectPolicy {
         // A resting or opening lid below the threshold must not start the
         // effect, including while an older closing observation is remembered.
         return hasBeenAboveThreshold
+            && isArmed
             && wasClosingRecently
             && !isClearlyOpening
             && predictedAngle <= threshold
