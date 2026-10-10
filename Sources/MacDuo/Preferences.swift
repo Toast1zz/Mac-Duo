@@ -9,6 +9,7 @@ final class Preferences: ObservableObject {
     private enum Key {
         static let isEnabled = "isEnabled"
         static let isTimeoutEnabled = "isTimeoutEnabled"
+        static let timeoutDuration = "timeoutDuration"
         static let thresholdAngle = "thresholdAngle"
         static let blurSpan = "blurSpan"
         static let maxBlurRadius = "maxBlurRadius"
@@ -21,7 +22,7 @@ final class Preferences: ObservableObject {
         static let isLivePicture = "isLivePicture"
 
         static let all = [
-            isEnabled, isTimeoutEnabled, thresholdAngle, blurSpan, maxBlurRadius,
+            isEnabled, isTimeoutEnabled, timeoutDuration, thresholdAngle, blurSpan, maxBlurRadius,
             maxDim, viewingDistance, recession, blurEvenness, dimReach,
             showsAngleInMenuBar, isLivePicture,
         ]
@@ -30,6 +31,7 @@ final class Preferences: ObservableObject {
     private static let factory: [String: Any] = [
         Key.isEnabled: true,
         Key.isTimeoutEnabled: true,
+        Key.timeoutDuration: 1.0,
         Key.thresholdAngle: 90.0,
         Key.blurSpan: 60.0,
         Key.maxBlurRadius: 135.0,
@@ -51,6 +53,11 @@ final class Preferences: ObservableObject {
     /// threshold, instead of waiting for the lid to open back past it.
     @Published var isTimeoutEnabled: Bool {
         didSet { defaults.set(isTimeoutEnabled, forKey: Key.isTimeoutEnabled) }
+    }
+
+    /// Seconds the lid has to hold still before the timeout ends the effect.
+    @Published var timeoutDuration: Double {
+        didSet { defaults.set(timeoutDuration, forKey: Key.timeoutDuration) }
     }
 
     /// Closing past this angle starts the depth effect. Degrees.
@@ -144,6 +151,7 @@ final class Preferences: ObservableObject {
         for key in Self.retired { defaults.removeObject(forKey: key) }
         isEnabled = defaults.bool(forKey: Key.isEnabled)
         isTimeoutEnabled = defaults.bool(forKey: Key.isTimeoutEnabled)
+        timeoutDuration = defaults.double(forKey: Key.timeoutDuration)
         thresholdAngle = defaults.double(forKey: Key.thresholdAngle)
         blurSpan = defaults.double(forKey: Key.blurSpan)
         maxBlurRadius = defaults.double(forKey: Key.maxBlurRadius)
@@ -162,6 +170,7 @@ final class Preferences: ObservableObject {
         }
         isEnabled = defaults.bool(forKey: Key.isEnabled)
         isTimeoutEnabled = defaults.bool(forKey: Key.isTimeoutEnabled)
+        timeoutDuration = defaults.double(forKey: Key.timeoutDuration)
         thresholdAngle = defaults.double(forKey: Key.thresholdAngle)
         blurSpan = defaults.double(forKey: Key.blurSpan)
         maxBlurRadius = defaults.double(forKey: Key.maxBlurRadius)

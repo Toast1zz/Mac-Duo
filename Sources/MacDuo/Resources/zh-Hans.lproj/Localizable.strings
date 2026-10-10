@@ -39,3 +39,6 @@
 " by Makito" = "（作者 Makito）";
 "Preview" = "预览";
 "Plays the effect once on the current screen." = "在当前屏幕上播放一次效果。";
+"Timeout after" = "超时时间";
+"%.1f s" = "%.1f 秒";
+"How long the lid has to hold still." = "屏幕停止移动多久后结束效果。";

@@ -123,8 +123,6 @@ final class LidController: ObservableObject {
     /// Movement within this many degrees counts as holding still.
     private static let timeoutMovementThreshold: Double = 2
 
-    /// How long the lid has to hold still before the timeout ends the effect.
-    private static let timeoutStillDuration: TimeInterval = 2
 
     /// How close the eased angle must get to flat before the last frame
     /// snaps there. Half a degree short, the dim curve still darkens the top
@@ -388,12 +386,12 @@ final class LidController: ObservableObject {
     }
 
     /// True once the angle has held within `timeoutMovementThreshold` of its
-    /// last significant position for `timeoutStillDuration`.
+    /// last significant position for the timeout duration setting.
     private func isPastTimeout(angle: Double) -> Bool {
         let now = CACurrentMediaTime()
         if let reference = timeoutReferenceAngle,
            abs(angle - reference) <= Self.timeoutMovementThreshold {
-            return now - timeoutReferenceTime >= Self.timeoutStillDuration
+            return now - timeoutReferenceTime >= preferences.timeoutDuration
         }
         timeoutReferenceAngle = angle
         timeoutReferenceTime = now

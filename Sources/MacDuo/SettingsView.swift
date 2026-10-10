@@ -113,6 +113,12 @@ struct SettingsView: View {
                 help: localized("Ends the effect once the angle stops changing.")
             )
             slider(
+                localized("Timeout after"), value: $preferences.timeoutDuration, in: 0.5...5,
+                format: localized("%.1f s"),
+                help: localized("How long the lid has to hold still.")
+            )
+            .disabled(!preferences.isTimeoutEnabled)
+            slider(
                 localized("Start angle"), value: $preferences.thresholdAngle, in: 5...130, format: "%.0f°",
                 help: localized("The effect starts at this angle.")
             )

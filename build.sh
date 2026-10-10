@@ -5,6 +5,7 @@
 #   ./build.sh            build and sign
 #   ./build.sh --run      build, sign, and relaunch the app
 #   ./build.sh --universal  build for Apple Silicon and Intel
+#   ./build.sh --install  build, sign, move into /Applications, and relaunch
 #
 # Signs with the first Apple Development identity in the keychain, so Screen
 # Recording permission survives rebuilds. Without one it signs ad-hoc, and
@@ -24,10 +25,12 @@ BUNDLE="build/${APP_NAME}.app"
 
 BUILD_ARGS=(-c release)
 RUN_APP=false
+INSTALL_APP=false
 for argument in "$@"; do
   case "$argument" in
     --universal) BUILD_ARGS+=(--arch arm64 --arch x86_64) ;;
     --run) RUN_APP=true ;;
+    --install) INSTALL_APP=true ;;
     *) echo "Unknown argument: $argument" >&2; exit 1 ;;
   esac
 done
@@ -62,8 +65,21 @@ codesign --verify --strict --verbose=1 "$BUNDLE"
 echo "built ${BUNDLE}"
 codesign -dv "$BUNDLE" 2>&1 | grep -E "Identifier|TeamIdentifier|Signature" || true
 
+if "$INSTALL_APP"; then
+  INSTALLED="/Applications/${APP_NAME}.app"
+  pkill -f "^$INSTALLED/Contents/MacOS/MacDuo( |$)" 2>/dev/null || true
+  sleep 0.5
+  rm -rf "$INSTALLED"
+  ditto "$BUNDLE" "$INSTALLED"
+  # One copy only, so Launch Services and the login item find this one.
+  rm -rf "$BUNDLE"
+  codesign --verify --strict "$INSTALLED"
+  open "$INSTALLED"
+  echo "installed ${INSTALLED}"
+fi
+
 if "$RUN_APP"; then
-  pkill -f -x "$PWD/$BUNDLE/Contents/MacOS/MacDuo" 2>/dev/null || true
+  pkill -f "^$PWD/$BUNDLE/Contents/MacOS/MacDuo( |$)" 2>/dev/null || true
   sleep 0.5
   open "$BUNDLE"
   echo "launched"
