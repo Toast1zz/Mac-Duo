@@ -1,6 +1,27 @@
 <div align="center">
 
-# Mac Duo
+# Toast Duo
+
+**A fork of [Mac Duo](https://github.com/sumimakito/Mac-Duo) by Makito, focused on fixes and polish.**
+
+</div>
+
+## What this fork changes
+
+- **Power:** a resting lid is polled at 10 Hz instead of 30 Hz, sensor jitter is ignored, frames that would look the same are not redrawn, and idle capture frames are skipped. Idle wakeups dropped about eightfold in measurement.
+- **Triggering:** rocking the lid around the start angle no longer replays the effect, and a shut lid that reads 360° counts as shut.
+- **Intel and AMD GPUs:** the blur uses blit mipmaps where the MPS Gaussian pyramid can fail (black edges or a red gradient).
+- **Safety:** the effect pauses on the lock screen, display sleep, and user switching. Captures fail closed if the app cannot exclude its own overlay. The sensor is reopened if reads keep failing.
+- **Usability:** an application icon, a Preview button in the panel, Screen Recording is requested at launch, and Timeout is on by default.
+- Its own bundle identifier, `com.toast.ToastDuo`, so it does not share settings or permissions with Mac Duo.
+
+The rest of this document is the original README, with the app name updated.
+
+<hr>
+
+<div align="center">
+
+## Mac Duo
 
 **Wish you could bring the iPhone Duo effect to your MacBook?**
 
@@ -46,7 +67,7 @@ Requires Xcode with Swift 6.0 or later. Run from the project directory:
 ./build.sh
 ```
 
-The script creates `build/Mac Duo.app` with an ad-hoc signature. Open it from Finder, or build and launch with:
+The script creates `build/Toast Duo.app`, signed with the first Apple Development identity in the keychain, or ad-hoc without one. Open it from Finder, or build and launch with:
 
 ```sh
 ./build.sh --run

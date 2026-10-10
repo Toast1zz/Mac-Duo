@@ -180,6 +180,9 @@ struct SettingsView: View {
                 }
             HStack {
                 Button(localized("Reset")) { preferences.resetToDefaults() }
+                Button(localized("Preview")) { controller.runPreview() }
+                    .disabled(!preferences.isEnabled || !hasScreenPermission || !controller.isSensorAvailable)
+                    .help(localized("Plays the effect once on the current screen."))
                 Spacer()
                 Button(localized("Quit"), action: onQuit)
             }
