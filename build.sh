@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 #
-# Builds Mac Duo.app from the SwiftPM package.
+# Builds Toast Duo.app from the SwiftPM package.
 #
 #   ./build.sh            build and sign
 #   ./build.sh --run      build, sign, and relaunch the app
 #   ./build.sh --universal  build for Apple Silicon and Intel
 #
-# Uses ad-hoc signing by default. macOS may require Screen Recording permission
-# again after rebuilding. Set SIGN_IDENTITY to use your own signing identity.
+# Signs with the first Apple Development identity in the keychain, so Screen
+# Recording permission survives rebuilds. Without one it signs ad-hoc, and
+# macOS may ask for the permission again after every rebuild. Set
+# SIGN_IDENTITY to choose an identity, or to - for ad-hoc.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
-APP_NAME="Mac Duo"
+if [[ -z "${SIGN_IDENTITY+set}" ]]; then
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/"Apple Development: / { print $2; exit }')"
+  SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+fi
+APP_NAME="Toast Duo"
 BUNDLE="build/${APP_NAME}.app"
 
 BUILD_ARGS=(-c release)

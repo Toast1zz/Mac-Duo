@@ -14,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         statusItemController = StatusItemController(controller: controller, preferences: preferences)
         controller.start()
+        // Asking puts the app in the Screen Recording list, so it can be
+        // switched on there. Only pointing at the pane leaves the list without
+        // it, most of all after a rebuild changes the signature.
+        if controller.isSensorAvailable, !CGPreflightScreenCaptureAccess() {
+            CGRequestScreenCaptureAccess()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

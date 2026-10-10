@@ -26,7 +26,7 @@ struct SettingsView: View {
     private static let width: CGFloat = 300
     private static let inset: CGFloat = 14
     private static let bodyHeight: CGFloat = 400
-    private static let authorURL = URL(string: "https://github.com/sumimakito")!
+    private static let upstreamURL = URL(string: "https://github.com/sumimakito/Mac-Duo")!
     private static let screenRecordingSettingsURL = URL(
         string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture"
     )!
@@ -73,7 +73,7 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("Mac Duo").font(.title2.weight(.semibold))
+            Text("Toast Duo").font(.title2.weight(.semibold))
             Spacer()
             Text(String(format: "%.1f°", controller.currentAngle))
                 .font(.system(.title3, design: .rounded).monospacedDigit())
@@ -186,9 +186,10 @@ struct SettingsView: View {
             .controlSize(.small)
             .padding(.top, 2)
             HStack(spacing: 0) {
-                Text(localized("Made by ")).foregroundStyle(.secondary)
-                Link("Makito", destination: Self.authorURL)
+                Text(localized("Based on ")).foregroundStyle(.secondary)
+                Link("Mac Duo", destination: Self.upstreamURL)
                     .pointingHand()
+                Text(localized(" by Makito")).foregroundStyle(.secondary)
                 Spacer()
                 Text("© 2026 Makito").foregroundStyle(.secondary)
             }
@@ -237,12 +238,14 @@ struct SettingsView: View {
             HStack {
                 Spacer()
                 Button(localized("Open System Settings")) {
+                    // Lists the app in the pane if an earlier request did not.
+                    CGRequestScreenCaptureAccess()
                     openScreenRecordingSettings()
                 }
                 .controlSize(.small)
             }
             if settingsOpenFailed {
-                Text(localized("Could not open System Settings. Open it manually and enable screen recording for Mac Duo under Privacy & Security."))
+                Text(localized("Could not open System Settings. Open it manually and enable screen recording for Toast Duo under Privacy & Security."))
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
             }

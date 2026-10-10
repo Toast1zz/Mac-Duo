@@ -12,13 +12,13 @@
 	<key>CFBundleExecutable</key>
 	<string>MacDuo</string>
 	<key>CFBundleIdentifier</key>
-	<string>to.maki.MacDuo</string>
+	<string>com.toast.ToastDuo</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Mac Duo</string>
+	<string>Toast Duo</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mac Duo</string>
+	<string>Toast Duo</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -36,6 +36,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright 2026 Makito</string>
+	<string>Copyright 2026 Makito. Toast Duo is a fork of Mac Duo.</string>
 </dict>
 </plist>

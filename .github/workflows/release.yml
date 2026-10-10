@@ -1,8 +1,8 @@
 name: Release
 
+# Needs the Developer ID and notary secrets, so it runs only when started by
+# hand. The CI workflow builds and tests every push.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
